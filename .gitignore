@@ -1,0 +1,24 @@
+# Angular
+node_modules/
+dist/
+.tmp/
+out-tsc/
+.angular/
+.cache/
+coverage/
+.DS_Store
+
+# Environment files
+*.env
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# System files
+Thumbs.db
+
+# Ignorar carpetas de exportación y subida
+/exports/
+/uploads/
