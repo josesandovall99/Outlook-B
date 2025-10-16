@@ -28,8 +28,10 @@ const pgPool = new pg.Pool({
 
 // 🛡️ CORS para Render
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "https://outlook-f.onrender.com",
+  origin: ["https://outlook-f.onrender.com", "http://localhost:3000"],
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
 app.use(express.json());
@@ -38,15 +40,19 @@ app.use(express.json());
 app.set("trust proxy", 1); // ✅ necesario para cookies seguras en HTTPS
 
 app.use(session({
-  store: new PgSession({ pool: pgPool, tableName: "user_sessions" }),
+  store: new PgSession({
+    pool: pgPool,
+    tableName: "user_sessions",
+  }),
   secret: process.env.SESION_SECRET || "super-secret",
   resave: false,
   saveUninitialized: false,
   cookie: {
-    maxAge: 1000 * 60 * 60 * 2,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    domain: ".onrender.com",
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",   // necesario para cross-domain
+    // ❌ no pongas domain aquí — Chrome lo ignora si no coincide exactamente
+    maxAge: 1000 * 60 * 60 * 2
   },
 }));
 
