@@ -28,7 +28,7 @@ const pgPool = new pg.Pool({
 
 // 🛡️ CORS para Render
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "https://outlookfrontend.onrender.com",
+  origin: process.env.FRONTEND_URL || "https://outlook-b.onrender.com",
   credentials: true,
 }));
 
@@ -73,8 +73,8 @@ const msalConfig = {
 const cca = new msal.ConfidentialClientApplication(msalConfig);
 
 const SCOPES = (process.env.SCOPES || "User.Read Mail.Read Mail.ReadWrite").split(" ");
-const REDIRECT_URI = process.env.REDIRECT_URI || "https://outlookbackend.onrender.com/auth/callback";
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://outlookfrontend.onrender.com";
+const REDIRECT_URI = process.env.REDIRECT_URI || "https://outlook-b.onrender.com/auth/callback";
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://outlook-b.onrender.com";
 
 // -----------------------------
 // 🔹 LOGIN MICROSOFT
