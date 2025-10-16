@@ -143,13 +143,25 @@ app.get("/auth/callback", async (req, res) => {
       UPDATE public.user_sessions SET usuario_id = $1 WHERE sid = $2
     `, [usuarioRow.id, req.sessionID]);
 
-    req.session.save((err) => {
+    req.session.save(async (err) => {
   if (err) {
     console.error("❌ Error guardando sesión:", err);
-  } else {
-    console.log("✅ Sesión guardada correctamente:", req.sessionID);
+    return res.status(500).send("Error guardando sesión");
   }
-  res.redirect(`${FRONTEND_URL}/permissions`);
+
+  try {
+    const updateResult = await pgPool.query(`
+      UPDATE public.user_sessions SET usuario_id = $1 WHERE sid = $2
+    `, [usuarioRow.id, req.sessionID]);
+
+    console.log("🔄 Fila actualizada:", updateResult.rowCount);
+  } catch (updateErr) {
+    console.error("❌ Error actualizando usuario_id en sesión:", updateErr.message);
+  }
+
+  setTimeout(() => {
+    res.redirect(`${FRONTEND_URL}/permissions`);
+  }, 500);
 });
   } catch (err) {
     console.error("❌ Error en /auth/callback:", err.response?.data || err.message);
@@ -165,6 +177,9 @@ app.get("/me", async (req, res) => {
   console.log("🧪 req.sessionID:", req.sessionID);
 
   if (!req.session.accessToken) return res.status(401).send("No autenticado");
+  if (!req.session.accessToken || !req.session.user?.id) {
+  return res.status(401).send("No autenticado");
+}
   try {
     const response = await axios.get("https://graph.microsoft.com/v1.0/me", {
       headers: { Authorization: `Bearer ${req.session.accessToken}` },
