@@ -144,12 +144,13 @@ app.get("/auth/callback", async (req, res) => {
     `, [usuarioRow.id, req.sessionID]);
 
     req.session.save((err) => {
-      if (err) {
-        console.error("❌ Error guardando sesión:", err);
-        return res.status(500).send("Error guardando sesión");
-      }
-      res.redirect(`${FRONTEND_URL}/permissions`);
-    });
+  if (err) {
+    console.error("❌ Error guardando sesión:", err);
+  } else {
+    console.log("✅ Sesión guardada correctamente:", req.sessionID);
+  }
+  res.redirect(`${FRONTEND_URL}/permissions`);
+});
   } catch (err) {
     console.error("❌ Error en /auth/callback:", err.response?.data || err.message);
     res.status(500).send("Error durante la autenticación");
