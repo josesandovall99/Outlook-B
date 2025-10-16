@@ -229,6 +229,267 @@ app.get("/contacts-by-category", async (req, res) => {
   }
 });
 
+// 📤 POST /archivos → guarda archivo importado
+app.post("/archivos", upload.single("archivo"), async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+  const usuarioId = req.session.user.id;
+  const nombreArchivo = req.file.originalname;
+  const rutaArchivo = req.file.path;
+  const fuente = req.body.fuente || "Plataforma desconocida";
+
+  try {
+    await pgPool.query(`
+      INSERT INTO public.archivos_importados (usuario_id, nombre_archivo, fuente, ruta_archivo)
+      VALUES ($1, $2, $3, $4)
+    `, [usuarioId, nombreArchivo, fuente, rutaArchivo]);
+    res.status(201).json({ mensaje: "Archivo guardado correctamente", ruta: rutaArchivo });
+  } catch (err) {
+    console.error("❌ Error al guardar archivo:", err.message);
+    res.status(500).send("Error al guardar archivo");
+  }
+});
+
+// 📥 GET /archivos → listar archivos del usuario
+app.get("/archivos", async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+  const usuarioId = req.session.user.id;
+  try {
+    const result = await pgPool.query(`
+      SELECT id, nombre_archivo, fuente, ruta_archivo, fecha_subida
+      FROM public.archivos_importados
+      WHERE usuario_id = $1
+      ORDER BY fecha_subida DESC
+    `, [usuarioId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error al obtener archivos:", err.message);
+    res.status(500).send("Error al obtener archivos");
+  }
+});
+
+// -----------------------------
+// ✅ NUEVOS ENDPOINTS: /exportaciones
+// -----------------------------
+
+// 📤 POST /exportaciones → registra una nueva exportación CSV
+app.post("/exportaciones", async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+  const usuarioId = req.session.user.id;
+  const { nombre_categoria, ruta_csv } = req.body;
+
+  if (!nombre_categoria || !ruta_csv) {
+    return res.status(400).send("Faltan datos (nombre_categoria, ruta_csv)");
+  }
+
+  try {
+    await pgPool.query(`
+      INSERT INTO public.exportaciones_outlook (usuario_id, nombre_categoria, ruta_csv)
+      VALUES ($1, $2, $3)
+    `, [usuarioId, nombre_categoria, ruta_csv]);
+    res.status(201).json({ mensaje: "Exportación registrada correctamente" });
+  } catch (err) {
+    console.error("❌ Error al guardar exportación:", err.message);
+    res.status(500).send("Error al guardar exportación");
+  }
+});
+
+// 📥 GET /exportaciones → listar exportaciones del usuario logueado
+app.get("/exportaciones", async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+  const usuarioId = req.session.user.id;
+  try {
+    const result = await pgPool.query(`
+      SELECT id, nombre_categoria, ruta_csv, fecha_creacion
+      FROM public.exportaciones_outlook
+      WHERE usuario_id = $1
+      ORDER BY fecha_creacion DESC
+    `, [usuarioId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error al obtener exportaciones:", err.message);
+    res.status(500).send("Error al obtener exportaciones");
+  }
+});
+
+
+app.post("/merge-files", upload.array("files", 2), async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+
+  const usuarioId = req.session.user.id;
+  const categoryName = req.body.categoryName || "NuevaCategoria";
+
+  if (!req.files || req.files.length !== 2)
+    return res.status(400).send("Debes subir exactamente dos archivos Excel");
+
+  try {
+    const [file1, file2] = req.files;
+
+    // 💾 Registrar los archivos subidos en la BD
+    for (const f of req.files) {
+      await pgPool.query(
+        `
+        INSERT INTO public.archivos_importados (usuario_id, nombre_archivo, fuente, ruta_archivo)
+        VALUES ($1, $2, $3, $4)
+        `,
+        [usuarioId, f.originalname, "Plataforma universitaria", f.path]
+      );
+    }
+
+    // 🧩 Función para leer Excel de forma segura
+    const leerExcelSeguros = (filePath) => {
+      const wb = XLSX.readFile(filePath);
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+      if (!data || data.length === 0) {
+        throw new Error(`El archivo ${path.basename(filePath)} está vacío o no tiene datos válidos.`);
+      }
+      return data;
+    };
+
+    const data1 = leerExcelSeguros(file1.path);
+    const data2 = leerExcelSeguros(file2.path);
+
+    // ⚙️ Detección automática de Moodle / Galileo
+    let moodle = [];
+    let galileo = [];
+
+    try {
+      const data1Keys = Object.keys(data1[0] || {}).map(k => k.toLowerCase());
+      const data2Keys = Object.keys(data2[0] || {}).map(k => k.toLowerCase());
+
+      const data1EsMoodle = data1Keys.some(k => k.includes("apellido") || k.includes("dirección"));
+      const data2EsMoodle = data2Keys.some(k => k.includes("apellido") || k.includes("dirección"));
+
+      if (data1EsMoodle && !data2EsMoodle) {
+        moodle = data1;
+        galileo = data2;
+      } else if (!data1EsMoodle && data2EsMoodle) {
+        moodle = data2;
+        galileo = data1;
+      } else {
+        console.warn("⚠️ No se pudo determinar cuál archivo es Moodle o Galileo. Se usará el orden por defecto.");
+        moodle = data1;
+        galileo = data2;
+      }
+
+      console.log("📄 Moodle columnas:", Object.keys(moodle[0]));
+      console.log("📄 Galileo columnas:", Object.keys(galileo[0]));
+    } catch (error) {
+      console.error("❌ Error al detectar tipo de archivo:", error);
+      return res.status(400).send("Error al analizar los encabezados de los archivos Excel.");
+    }
+
+    // 🧠 Procesar datos de Moodle
+    const moodleData = moodle.map((m) => ({
+      firstName: m["Nombre"]?.split(" ")[0] || "",
+      middleName: m["Nombre"]?.split(" ").slice(1).join(" ") || "",
+      lastName: m["Apellido(s)"] || "",
+      email: m["Dirección de correo"] || "",
+      phone: "",
+      category: categoryName,
+    }));
+
+    // 🧠 Procesar datos de Galileo
+    const galileoData = galileo
+      .filter((g) => g["EMAIL"])
+      .map((g) => ({
+        firstName: g["NOMBRE"]?.split(" ")[1] || "",
+        middleName: g["NOMBRE"]?.split(" ")[0] || "",
+        lastName: g["NOMBRE"]?.split(" ").slice(2).join(" ") || "",
+        email: g["EMAIL"] || "",
+        phone: g["TELÉFONO"] || "",
+        category: categoryName,
+      }));
+
+    // 🔗 Unir sin duplicados por email
+    const combined = [...galileoData];
+    const galileoEmails = galileoData.map((g) => g.email.toLowerCase());
+    moodleData.forEach((m) => {
+      if (m.email && !galileoEmails.includes(m.email.toLowerCase())) combined.push(m);
+    });
+
+    // 📑 Formato final Outlook
+    const outlookData = combined.map((r) => ({
+      "First Name": r.firstName,
+      "Middle Name": r.middleName,
+      "Last Name": r.lastName,
+      "Mobile Phone": r.phone,
+      "Categories": r.category,
+      "E-mail Address": r.email,
+    }));
+
+    // 📦 Guardar CSV en carpeta /exports
+    const csv = parse(outlookData);
+    const exportDir = path.join(process.cwd(), "exports");
+    if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir);
+    const exportPath = path.join(exportDir, `${categoryName.replace(/\s+/g, "_")}.csv`);
+    fs.writeFileSync(exportPath, csv, "utf8");
+
+    // 💾 Registrar exportación en BD
+    await pgPool.query(
+      `
+      INSERT INTO public.exportaciones_outlook (usuario_id, nombre_categoria, ruta_csv)
+      VALUES ($1, $2, $3)
+      `,
+      [usuarioId, categoryName, exportPath]
+    );
+
+    console.log(`✅ CSV generado: ${exportPath}`);
+
+    // 📤 Devolver respuesta JSON al frontend
+    res.status(201).json({
+      mensaje: "Archivos unificados correctamente",
+      categoria: categoryName,
+      totalRegistros: outlookData.length,
+      csvPath: `/exports/${categoryName.replace(/\s+/g, "_")}.csv`,
+    });
+  } catch (error) {
+    console.error("❌ Error al unir archivos:", error);
+    res.status(500).json({ mensaje: "Error al procesar los archivos" });
+  }
+});
+
+
+// 📥 GET /exportaciones/:id/download
+// Permite descargar un CSV generado anteriormente
+app.get("/exportaciones/:id/download", async (req, res) => {
+  if (!req.session.user) return res.status(401).send("No autenticado");
+
+  const usuarioId = req.session.user.id;
+  const exportacionId = req.params.id;
+
+  try {
+    // Buscar la exportación en la base de datos
+    const result = await pgPool.query(
+      `
+      SELECT ruta_csv, nombre_categoria
+      FROM public.exportaciones_outlook
+      WHERE id = $1 AND usuario_id = $2
+      `,
+      [exportacionId, usuarioId]
+    );
+
+    if (result.rowCount === 0)
+      return res.status(404).send("No se encontró la exportación o no pertenece a este usuario.");
+
+    const { ruta_csv, nombre_categoria } = result.rows[0];
+
+    // Validar existencia del archivo
+    const filePath = path.resolve(ruta_csv);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send("El archivo CSV no existe en el servidor.");
+    }
+
+    // Forzar descarga con nombre amigable
+    res.download(filePath, `${nombre_categoria}.csv`);
+  } catch (error) {
+    console.error("❌ Error en /exportaciones/:id/download:", error);
+    res.status(500).send("Error al descargar la exportación.");
+  }
+});
+
+
+
 // -----------------------------
 // 🔹 SESIÓN / LOGOUT
 // -----------------------------
