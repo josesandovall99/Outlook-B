@@ -28,7 +28,7 @@ const pgPool = new pg.Pool({
 
 // 🛡️ CORS para Render
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "https://outlook-b.onrender.com",
+  origin: process.env.FRONTEND_URL || "https://outlook-f.onrender.com",
   credentials: true,
 }));
 
@@ -46,6 +46,7 @@ app.use(session({
     maxAge: 1000 * 60 * 60 * 2,
     secure: process.env.NODE_ENV === "production",
     sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    domain: ".onrender.com",
   },
 }));
 
