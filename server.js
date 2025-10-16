@@ -14,6 +14,7 @@ import * as msal from "@azure/msal-node";
 
 dotenv.config();
 const app = express();
+app.set("trust proxy", 1); // ✅ necesario para cookies seguras en HTTPS
 const port = process.env.PORT || 5000;
 
 // 🧠 PostgreSQL session store
@@ -28,7 +29,7 @@ const pgPool = new pg.Pool({
 
 // 🛡️ CORS para Render
 app.use(cors({
-  origin: ["https://outlook-f.onrender.com", "http://localhost:3000"],
+  origin: ["https://outlook-f.onrender.com"],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -37,21 +38,17 @@ app.use(cors({
 app.use(express.json());
 
 // 🔐 Sesión segura para Render
-app.set("trust proxy", 1); // ✅ necesario para cookies seguras en HTTPS
+
 
 app.use(session({
-  store: new PgSession({
-    pool: pgPool,
-    tableName: "user_sessions",
-  }),
-  secret: process.env.SESION_SECRET || "super-secret",
+  store: new PgSession({ pool: pgPool, tableName: "user_sessions" }),
+  secret: process.env.SESION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",   // necesario para cross-domain
-    // ❌ no pongas domain aquí — Chrome lo ignora si no coincide exactamente
+    secure: true,     // ⚠️ Obligatorio en HTTPS (Render)
+    sameSite: "none", // ⚠️ Necesario para cross-domain cookies
     maxAge: 1000 * 60 * 60 * 2
   },
 }));
