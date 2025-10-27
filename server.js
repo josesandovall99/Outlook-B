@@ -1,9 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import session from "express-session";
 import pg from "pg";
-import connectPgSimple from "connect-pg-simple";
 import axios from "axios";
 import path from "path";
 import fs from "fs";
@@ -14,11 +12,11 @@ import * as msal from "@azure/msal-node";
 
 dotenv.config();
 const app = express();
-app.set("trust proxy", 1); // ✅ necesario para cookies seguras en HTTPS
+//app.set("trust proxy", 1); //necesario para cookies seguras en HTTPS
 const port = process.env.PORT || 5000;
 
-// 🧠 PostgreSQL session store
-const PgSession = connectPgSimple(session);
+//PostgreSQL session store
+//const PgSession = connectPgSimple(session);
 const pgPool = new pg.Pool({
   host: process.env.PG_HOST,
   port: process.env.PG_PORT,
@@ -27,7 +25,7 @@ const pgPool = new pg.Pool({
   database: process.env.PG_DATABASE,
 });
 
-// 🛡️ CORS para Render
+// CORS para Render
 app.use(cors({
   origin: ["https://outlook-f.onrender.com"],
   credentials: true,
@@ -39,7 +37,7 @@ app.use(express.json());
 
 // 🔐 Sesión segura para Render
 
-
+/*
 app.use(session({
   store: new PgSession({ pool: pgPool, tableName: "user_sessions" }),
   secret: process.env.SESION_SECRET,
@@ -52,8 +50,8 @@ app.use(session({
     maxAge: 1000 * 60 * 60 * 2
   },
 }));
-
-// ✅ Crear carpetas si no existen
+*/
+//Crear carpetas si no existen
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const exportDir = path.join(process.cwd(), "exports");
@@ -66,7 +64,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// 🔐 Configuración MSAL
+// Configuración MSAL
 const msalConfig = {
   auth: {
     clientId: process.env.CLIENT_ID,
@@ -81,7 +79,7 @@ const REDIRECT_URI = process.env.REDIRECT_URI || "https://outlook-b.onrender.com
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://outlook-b.onrender.com";
 
 // -----------------------------
-// 🔹 LOGIN MICROSOFT
+//LOGIN MICROSOFT
 // -----------------------------
 app.get("/auth/login", async (req, res) => {
   try {
@@ -97,7 +95,7 @@ app.get("/auth/login", async (req, res) => {
 });
 
 // -----------------------------
-// 🔹 CALLBACK MICROSOFT
+// CALLBACK MICROSOFT
 // -----------------------------
 app.get("/auth/callback", async (req, res) => {
   const code = req.query.code;
@@ -110,9 +108,9 @@ app.get("/auth/callback", async (req, res) => {
       redirectUri: REDIRECT_URI,
     });
 
-    const { accessToken, account } = tokenResponse;
-    req.session.accessToken = accessToken;
+    const { accessToken } = tokenResponse;
 
+    // Obtener datos del usuario desde Microsoft Graph
     const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -122,52 +120,25 @@ app.get("/auth/callback", async (req, res) => {
     const nombre = graphUser.displayName || null;
     const email = graphUser.mail || graphUser.userPrincipalName || null;
 
+    // Guardar o actualizar el usuario en la base de datos
     const upsertQuery = `
       INSERT INTO public.usuario (nombre, email, microsoft_id)
       VALUES ($1, $2, $3)
       ON CONFLICT (microsoft_id)
       DO UPDATE SET nombre = EXCLUDED.nombre, email = EXCLUDED.email
-      RETURNING id, nombre, email, microsoft_id;
+      RETURNING id;
     `;
-    const result = await pgPool.query(upsertQuery, [nombre, email, microsoftId]);
-    const usuarioRow = result.rows[0];
+    await pgPool.query(upsertQuery, [nombre, email, microsoftId]);
 
-    req.session.user = {
-      id: usuarioRow.id,
-      nombre: usuarioRow.nombre,
-      email: usuarioRow.email,
-      microsoftId: usuarioRow.microsoft_id,
-    };
-
-    await pgPool.query(`
-      UPDATE public.user_sessions SET usuario_id = $1 WHERE sid = $2
-    `, [usuarioRow.id, req.sessionID]);
-
-    req.session.save(async (err) => {
-  if (err) {
-    console.error("❌ Error guardando sesión:", err);
-    return res.status(500).send("Error guardando sesión");
-  }
-
-  try {
-    const updateResult = await pgPool.query(`
-      UPDATE public.user_sessions SET usuario_id = $1 WHERE sid = $2
-    `, [usuarioRow.id, req.sessionID]);
-
-    console.log("🔄 Fila actualizada:", updateResult.rowCount);
-  } catch (updateErr) {
-    console.error("❌ Error actualizando usuario_id en sesión:", updateErr.message);
-  }
-
-  setTimeout(() => {
-    res.redirect(`${FRONTEND_URL}/permissions`);
-  }, 500);
-});
+    // Redirigir al frontend con el token
+    const redirectUrl = `${FRONTEND_URL}/token-callback?token=${encodeURIComponent(accessToken)}`;
+    res.redirect(redirectUrl);
   } catch (err) {
     console.error("❌ Error en /auth/callback:", err.response?.data || err.message);
     res.status(500).send("Error durante la autenticación");
   }
 });
+
 
 // -----------------------------
 // 🔹 /me
@@ -176,13 +147,12 @@ app.get("/me", async (req, res) => {
   console.log("🧪 req.session:", req.session);
   console.log("🧪 req.sessionID:", req.sessionID);
 
-  if (!req.session.accessToken) return res.status(401).send("No autenticado");
-  if (!req.session.accessToken || !req.session.user?.id) {
-  return res.status(401).send("No autenticado");
-}
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).send("No autenticado");
+  
   try {
     const response = await axios.get("https://graph.microsoft.com/v1.0/me", {
-      headers: { Authorization: `Bearer ${req.session.accessToken}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     res.json({ graph: response.data, localUser: req.session.user || null });
   } catch (err) {
@@ -231,8 +201,21 @@ app.get("/contacts-by-category", async (req, res) => {
 
 // 📤 POST /archivos → guarda archivo importado
 app.post("/archivos", upload.single("archivo"), async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
-  const usuarioId = req.session.user.id;
+  const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
+
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
   const nombreArchivo = req.file.originalname;
   const rutaArchivo = req.file.path;
   const fuente = req.body.fuente || "Plataforma desconocida";
@@ -251,8 +234,22 @@ app.post("/archivos", upload.single("archivo"), async (req, res) => {
 
 // 📥 GET /archivos → listar archivos del usuario
 app.get("/archivos", async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
-  const usuarioId = req.session.user.id;
+const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
+
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
+
   try {
     const result = await pgPool.query(`
       SELECT id, nombre_archivo, fuente, ruta_archivo, fecha_subida
@@ -273,8 +270,22 @@ app.get("/archivos", async (req, res) => {
 
 // 📤 POST /exportaciones → registra una nueva exportación CSV
 app.post("/exportaciones", async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
-  const usuarioId = req.session.user.id;
+const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
+
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
+
   const { nombre_categoria, ruta_csv } = req.body;
 
   if (!nombre_categoria || !ruta_csv) {
@@ -295,8 +306,22 @@ app.post("/exportaciones", async (req, res) => {
 
 // 📥 GET /exportaciones → listar exportaciones del usuario logueado
 app.get("/exportaciones", async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
-  const usuarioId = req.session.user.id;
+const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
+
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
+
   try {
     const result = await pgPool.query(`
       SELECT id, nombre_categoria, ruta_csv, fecha_creacion
@@ -313,9 +338,22 @@ app.get("/exportaciones", async (req, res) => {
 
 
 app.post("/merge-files", upload.array("files", 2), async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
+const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
 
-  const usuarioId = req.session.user.id;
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
+
   const categoryName = req.body.categoryName || "NuevaCategoria";
 
   if (!req.files || req.files.length !== 2)
@@ -453,9 +491,22 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
 // 📥 GET /exportaciones/:id/download
 // Permite descargar un CSV generado anteriormente
 app.get("/exportaciones/:id/download", async (req, res) => {
-  if (!req.session.user) return res.status(401).send("No autenticado");
+  const token = req.headers.authorization?.split(" ")[1];
+if (!token) return res.status(401).send("No autenticado");
 
-  const usuarioId = req.session.user.id;
+const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const microsoftId = meResp.data.id;
+
+const userQuery = await pgPool.query(
+  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+  [microsoftId]
+);
+if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+
+const usuarioId = userQuery.rows[0].id;
+
   const exportacionId = req.params.id;
 
   try {
@@ -493,6 +544,7 @@ app.get("/exportaciones/:id/download", async (req, res) => {
 // -----------------------------
 // 🔹 SESIÓN / LOGOUT
 // -----------------------------
+/*
 app.get("/session-check", (req, res) => {
   res.json({ token: req.session.accessToken || null, localUser: req.session.user || null });
 });
@@ -511,7 +563,7 @@ app.post("/logout", (req, res) => {
     res.status(200).send("No hay sesión activa.");
   }
 });
-
+*/
 // ✅ Servir carpeta /exports
 app.use("/exports", express.static(exportDir));
 
