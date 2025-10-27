@@ -179,7 +179,8 @@ app.get("/me", async (req, res) => {
 // 🔹 CONTACTOS POR CATEGORÍA
 // -----------------------------
 app.get("/contacts-by-category", async (req, res) => {
-  if (!req.session.accessToken) return res.status(401).send("No autenticado");
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).send("No autenticado");
 
   try {
     let allContacts = [];
@@ -187,7 +188,7 @@ app.get("/contacts-by-category", async (req, res) => {
 
     while (nextLink) {
       const resp = await axios.get(nextLink, {
-        headers: { Authorization: `Bearer ${req.session.accessToken}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       const data = resp.data;
       allContacts = allContacts.concat(data.value || []);
@@ -212,6 +213,7 @@ app.get("/contacts-by-category", async (req, res) => {
     res.status(500).send("Error al obtener contactos");
   }
 });
+
 
 // 📤 POST /archivos → guarda archivo importado
 app.post("/archivos", upload.single("archivo"), async (req, res) => {
