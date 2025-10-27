@@ -144,22 +144,36 @@ app.get("/auth/callback", async (req, res) => {
 // 🔹 /me
 // -----------------------------
 app.get("/me", async (req, res) => {
-  console.log("🧪 req.session:", req.session);
-  console.log("🧪 req.sessionID:", req.sessionID);
-
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).send("No autenticado");
-  
+
   try {
     const response = await axios.get("https://graph.microsoft.com/v1.0/me", {
       headers: { Authorization: `Bearer ${token}` },
     });
-    res.json({ graph: response.data, localUser: req.session.user || null });
+
+    const graphUser = response.data;
+    const microsoftId = graphUser.id;
+
+    const userQuery = await pgPool.query(
+      `SELECT id, nombre, email FROM public.usuario WHERE microsoft_id = $1`,
+      [microsoftId]
+    );
+
+    if (userQuery.rowCount === 0) {
+      return res.status(401).send("Usuario no registrado");
+    }
+
+    res.json({
+      graph: graphUser,
+      localUser: userQuery.rows[0],
+    });
   } catch (err) {
     console.error("❌ Error en /me:", err.message);
     res.status(500).send("Error al obtener usuario");
   }
 });
+
 
 // -----------------------------
 // 🔹 CONTACTOS POR CATEGORÍA
@@ -234,22 +248,8 @@ const usuarioId = userQuery.rows[0].id;
 
 // 📥 GET /archivos → listar archivos del usuario
 app.get("/archivos", async (req, res) => {
-const token = req.headers.authorization?.split(" ")[1];
-if (!token) return res.status(401).send("No autenticado");
-
-const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
-  headers: { Authorization: `Bearer ${token}` },
-});
-const microsoftId = meResp.data.id;
-
-const userQuery = await pgPool.query(
-  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
-  [microsoftId]
-);
-if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
-
-const usuarioId = userQuery.rows[0].id;
-
+  if (!req.session.user) return res.status(401).send("No autenticado");
+  const usuarioId = req.session.user.id;
   try {
     const result = await pgPool.query(`
       SELECT id, nombre_archivo, fuente, ruta_archivo, fecha_subida
