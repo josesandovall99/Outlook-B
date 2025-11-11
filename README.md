@@ -45,3 +45,7 @@ Su objetivo es facilitar la creación de categorías y la exportación de contac
 
 
 URL de la aplicacion: https://outlook-f.onrender.com/
+
+## Formato de archivos:
+1. Moddle: https://mailudesedu-my.sharepoint.com/:x:/g/personal/02210132001_mail_udes_edu_co/EcB67JSfDRdIlu6z3akign4BheLPC3ePM-HCD50YWHbCHQ?e=ahiJUH
+2. Galileo: https://mailudesedu-my.sharepoint.com/:x:/g/personal/02210132001_mail_udes_edu_co/EcMMdc5e_E1HreTNTCPjBi4BX-9WcdJ_IceXzuvLzgI9LQ?e=wjY9Qz
