@@ -340,21 +340,21 @@ const usuarioId = userQuery.rows[0].id;
 
 
 app.post("/merge-files", upload.array("files", 2), async (req, res) => {
-const token = req.headers.authorization?.split(" ")[1];
-if (!token) return res.status(401).send("No autenticado");
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).send("No autenticado");
 
-const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
-  headers: { Authorization: `Bearer ${token}` },
-});
-const microsoftId = meResp.data.id;
+  const meResp = await axios.get("https://graph.microsoft.com/v1.0/me", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const microsoftId = meResp.data.id;
 
-const userQuery = await pgPool.query(
-  `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
-  [microsoftId]
-);
-if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
+  const userQuery = await pgPool.query(
+    `SELECT id FROM public.usuario WHERE microsoft_id = $1`,
+    [microsoftId]
+  );
+  if (userQuery.rowCount === 0) return res.status(401).send("Usuario no registrado");
 
-const usuarioId = userQuery.rows[0].id;
+  const usuarioId = userQuery.rows[0].id;
 
   const categoryName = req.body.categoryName || "NuevaCategoria";
 
@@ -364,7 +364,7 @@ const usuarioId = userQuery.rows[0].id;
   try {
     const [file1, file2] = req.files;
 
-    // 💾 Registrar los archivos subidos en la BD
+    // 💾 Registrar archivos en BD
     for (const f of req.files) {
       await pgPool.query(
         `
@@ -375,13 +375,20 @@ const usuarioId = userQuery.rows[0].id;
       );
     }
 
-    // 🧩 Función para leer Excel de forma segura
+    // 🧩 Función para leer Excel desde fila 9 (range: 8)
     const leerExcelSeguros = (filePath) => {
       const wb = XLSX.readFile(filePath);
       const firstSheet = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+
+      const data = XLSX.utils.sheet_to_json(firstSheet, {
+        defval: "",
+        range: 8, // <-- leer desde fila 9
+      });
+
       if (!data || data.length === 0) {
-        throw new Error(`El archivo ${path.basename(filePath)} está vacío o no tiene datos válidos.`);
+        throw new Error(
+          `El archivo ${path.basename(filePath)} está vacío o no tiene datos válidos.`
+        );
       }
       return data;
     };
@@ -389,16 +396,20 @@ const usuarioId = userQuery.rows[0].id;
     const data1 = leerExcelSeguros(file1.path);
     const data2 = leerExcelSeguros(file2.path);
 
-    // ⚙️ Detección automática de Moodle / Galileo
+    // ⚙️ Detección automática Moodle / Galileo
     let moodle = [];
     let galileo = [];
 
     try {
-      const data1Keys = Object.keys(data1[0] || {}).map(k => k.toLowerCase());
-      const data2Keys = Object.keys(data2[0] || {}).map(k => k.toLowerCase());
+      const data1Keys = Object.keys(data1[0] || {}).map((k) => k.toLowerCase());
+      const data2Keys = Object.keys(data2[0] || {}).map((k) => k.toLowerCase());
 
-      const data1EsMoodle = data1Keys.some(k => k.includes("apellido") || k.includes("dirección"));
-      const data2EsMoodle = data2Keys.some(k => k.includes("apellido") || k.includes("dirección"));
+      const data1EsMoodle = data1Keys.some(
+        (k) => k.includes("apellido") || k.includes("dirección")
+      );
+      const data2EsMoodle = data2Keys.some(
+        (k) => k.includes("apellido") || k.includes("dirección")
+      );
 
       if (data1EsMoodle && !data2EsMoodle) {
         moodle = data1;
@@ -407,7 +418,9 @@ const usuarioId = userQuery.rows[0].id;
         moodle = data2;
         galileo = data1;
       } else {
-        console.warn("⚠️ No se pudo determinar cuál archivo es Moodle o Galileo. Se usará el orden por defecto.");
+        console.warn(
+          "⚠️ No se pudo determinar cuál archivo es Moodle o Galileo. Se usará el orden por defecto."
+        );
         moodle = data1;
         galileo = data2;
       }
@@ -416,10 +429,12 @@ const usuarioId = userQuery.rows[0].id;
       console.log("📄 Galileo columnas:", Object.keys(galileo[0]));
     } catch (error) {
       console.error("❌ Error al detectar tipo de archivo:", error);
-      return res.status(400).send("Error al analizar los encabezados de los archivos Excel.");
+      return res
+        .status(400)
+        .send("Error al analizar los encabezados de los archivos Excel.");
     }
 
-    // 🧠 Procesar datos de Moodle
+    // 🧠 Procesar datos Moodle
     const moodleData = moodle.map((m) => ({
       firstName: m["Nombre"]?.split(" ")[0] || "",
       middleName: m["Nombre"]?.split(" ").slice(1).join(" ") || "",
@@ -429,7 +444,7 @@ const usuarioId = userQuery.rows[0].id;
       category: categoryName,
     }));
 
-    // 🧠 Procesar datos de Galileo
+    // 🧠 Procesar datos Galileo
     const galileoData = galileo
       .filter((g) => g["EMAIL"])
       .map((g) => ({
@@ -444,28 +459,35 @@ const usuarioId = userQuery.rows[0].id;
     // 🔗 Unir sin duplicados por email
     const combined = [...galileoData];
     const galileoEmails = galileoData.map((g) => g.email.toLowerCase());
+
     moodleData.forEach((m) => {
-      if (m.email && !galileoEmails.includes(m.email.toLowerCase())) combined.push(m);
+      if (m.email && !galileoEmails.includes(m.email.toLowerCase()))
+        combined.push(m);
     });
 
-    // 📑 Formato final Outlook
+    // 📑 Formato final para Outlook
     const outlookData = combined.map((r) => ({
       "First Name": r.firstName,
       "Middle Name": r.middleName,
       "Last Name": r.lastName,
       "Mobile Phone": r.phone,
-      "Categories": r.category,
+      Categories: r.category,
       "E-mail Address": r.email,
     }));
 
-    // 📦 Guardar CSV en carpeta /exports
+    // 📦 Guardar CSV
     const csv = parse(outlookData);
     const exportDir = path.join(process.cwd(), "exports");
     if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir);
-    const exportPath = path.join(exportDir, `${categoryName.replace(/\s+/g, "_")}.csv`);
+
+    const exportPath = path.join(
+      exportDir,
+      `${categoryName.replace(/\s+/g, "_")}.csv`
+    );
+
     fs.writeFileSync(exportPath, csv, "utf8");
 
-    // 💾 Registrar exportación en BD
+    // 💾 Registrar exportación
     await pgPool.query(
       `
       INSERT INTO public.exportaciones_outlook (usuario_id, nombre_categoria, ruta_csv)
@@ -476,7 +498,6 @@ const usuarioId = userQuery.rows[0].id;
 
     console.log(`✅ CSV generado: ${exportPath}`);
 
-    // 📤 Devolver respuesta JSON al frontend
     res.status(201).json({
       mensaje: "Archivos unificados correctamente",
       categoria: categoryName,
@@ -488,6 +509,7 @@ const usuarioId = userQuery.rows[0].id;
     res.status(500).json({ mensaje: "Error al procesar los archivos" });
   }
 });
+
 
 
 // 📥 GET /exportaciones/:id/download
