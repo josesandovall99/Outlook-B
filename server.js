@@ -375,14 +375,13 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
       );
     }
 
-    // 🧩 Función para leer Excel desde fila 9 (range: 8)
-    const leerExcelSeguros = (filePath) => {
+    // 🧩 Moodle lector normal (no se toca)
+    const leerExcelNormal = (filePath) => {
       const wb = XLSX.readFile(filePath);
       const firstSheet = wb.Sheets[wb.SheetNames[0]];
 
       const data = XLSX.utils.sheet_to_json(firstSheet, {
         defval: "",
-        range: 8, // <-- leer desde fila 9
       });
 
       if (!data || data.length === 0) {
@@ -393,36 +392,58 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
       return data;
     };
 
-    const data1 = leerExcelSeguros(file1.path);
-    const data2 = leerExcelSeguros(file2.path);
+    // 🧩 Galileo lector especial (lee desde fila 9)
+    const leerExcelGalileo = (filePath) => {
+      const wb = XLSX.readFile(filePath);
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
 
-    // ⚙️ Detección automática Moodle / Galileo
+      const data = XLSX.utils.sheet_to_json(firstSheet, {
+        defval: "",
+        range: 8, // <-- SOLO GALILEO usa fila 9
+      });
+
+      if (!data || data.length === 0) {
+        throw new Error(
+          `El archivo ${path.basename(filePath)} está vacío o no tiene datos válidos.`
+        );
+      }
+      return data;
+    };
+
+    // 🔍 Primero leer NORMAL ambos (para detectar cuál es cuál)
+    const data1Temp = leerExcelNormal(file1.path);
+    const data2Temp = leerExcelNormal(file2.path);
+
     let moodle = [];
     let galileo = [];
+    let data1EsMoodle = false;
+    let data2EsMoodle = false;
 
     try {
-      const data1Keys = Object.keys(data1[0] || {}).map((k) => k.toLowerCase());
-      const data2Keys = Object.keys(data2[0] || {}).map((k) => k.toLowerCase());
+      const data1Keys = Object.keys(data1Temp[0] || {}).map((k) =>
+        k.toLowerCase()
+      );
+      const data2Keys = Object.keys(data2Temp[0] || {}).map((k) =>
+        k.toLowerCase()
+      );
 
-      const data1EsMoodle = data1Keys.some(
+      data1EsMoodle = data1Keys.some(
         (k) => k.includes("apellido") || k.includes("dirección")
       );
-      const data2EsMoodle = data2Keys.some(
+      data2EsMoodle = data2Keys.some(
         (k) => k.includes("apellido") || k.includes("dirección")
       );
 
       if (data1EsMoodle && !data2EsMoodle) {
-        moodle = data1;
-        galileo = data2;
+        moodle = leerExcelNormal(file1.path);
+        galileo = leerExcelGalileo(file2.path); // <-- aquí aplica range:8
       } else if (!data1EsMoodle && data2EsMoodle) {
-        moodle = data2;
-        galileo = data1;
+        moodle = leerExcelNormal(file2.path);
+        galileo = leerExcelGalileo(file1.path); // <-- aquí aplica range:8
       } else {
-        console.warn(
-          "⚠️ No se pudo determinar cuál archivo es Moodle o Galileo. Se usará el orden por defecto."
-        );
-        moodle = data1;
-        galileo = data2;
+        console.warn("⚠️ No se pudo determinar correcto. Se usa por defecto:");
+        moodle = leerExcelNormal(file1.path);
+        galileo = leerExcelGalileo(file2.path); // <-- Galileo por defecto
       }
 
       console.log("📄 Moodle columnas:", Object.keys(moodle[0]));
@@ -434,7 +455,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
         .send("Error al analizar los encabezados de los archivos Excel.");
     }
 
-    // 🧠 Procesar datos Moodle
+    // 🧠 Procesar Moodle (NO SE TOCA)
     const moodleData = moodle.map((m) => ({
       firstName: m["Nombre"]?.split(" ")[0] || "",
       middleName: m["Nombre"]?.split(" ").slice(1).join(" ") || "",
@@ -444,7 +465,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
       category: categoryName,
     }));
 
-    // 🧠 Procesar datos Galileo
+    // 🧠 Procesar Galileo (YA LEE DESDE FILA 9)
     const galileoData = galileo
       .filter((g) => g["EMAIL"])
       .map((g) => ({
@@ -456,7 +477,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
         category: categoryName,
       }));
 
-    // 🔗 Unir sin duplicados por email
+    // 🔗 Unir sin duplicados
     const combined = [...galileoData];
     const galileoEmails = galileoData.map((g) => g.email.toLowerCase());
 
@@ -465,7 +486,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
         combined.push(m);
     });
 
-    // 📑 Formato final para Outlook
+    // 📑 Outlook
     const outlookData = combined.map((r) => ({
       "First Name": r.firstName,
       "Middle Name": r.middleName,
@@ -475,9 +496,10 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
       "E-mail Address": r.email,
     }));
 
-    // 📦 Guardar CSV
+    // 📦 Export CSV
     const csv = parse(outlookData);
     const exportDir = path.join(process.cwd(), "exports");
+
     if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir);
 
     const exportPath = path.join(
@@ -487,7 +509,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
 
     fs.writeFileSync(exportPath, csv, "utf8");
 
-    // 💾 Registrar exportación
+    // 💾 Guardar registro
     await pgPool.query(
       `
       INSERT INTO public.exportaciones_outlook (usuario_id, nombre_categoria, ruta_csv)
@@ -495,8 +517,6 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
       `,
       [usuarioId, categoryName, exportPath]
     );
-
-    console.log(`✅ CSV generado: ${exportPath}`);
 
     res.status(201).json({
       mensaje: "Archivos unificados correctamente",
@@ -509,6 +529,7 @@ app.post("/merge-files", upload.array("files", 2), async (req, res) => {
     res.status(500).json({ mensaje: "Error al procesar los archivos" });
   }
 });
+
 
 
 
